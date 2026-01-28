@@ -1,45 +1,58 @@
 from flask import Flask, request, jsonify
-import json, os
-from pathlib import Path
+import os
+import psycopg2
+import psycopg2.extras
 
 app = Flask(__name__)
-
-# Use Render's persistent disk if you enable it (recommended)
-DATA_FILE = Path(os.environ.get("DATA_FILE", "highscores.json"))
 MAX_SCORES = 10
 
-def load_scores():
-    if not DATA_FILE.exists():
-        return {"highscores": []}
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
-
-def save_scores(data):
-    DATA_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def get_conn():
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise RuntimeError("DATABASE_URL env var is not set")
+    return psycopg2.connect(db_url, sslmode="require")
 
 @app.route("/highscores", methods=["GET"])
 def get_highscores():
-    return jsonify(load_scores())
+    with get_conn() as conn:
+        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
+            cur.execute("""
+                select initials, score
+                from public.highscores
+                order by score desc, created_at asc
+                limit %s;
+            """, (MAX_SCORES,))
+            rows = cur.fetchall()
+
+    return jsonify({
+        "highscores": [{"initials": r["initials"], "score": r["score"]} for r in rows]
+    })
 
 @app.route("/submit", methods=["POST"])
 def submit_score():
-    data = request.get_json()
+    data = request.get_json(silent=True)
+
     if not data or "initials" not in data or "score" not in data:
         return {"error": "Invalid payload"}, 400
 
     initials = str(data["initials"])[:3].upper()
-    score = int(data["score"])
+    try:
+        score = int(data["score"])
+    except:
+        return {"error": "Score must be an integer"}, 400
 
-    scores = load_scores()
-    scores["highscores"].append({"initials": initials, "score": score})
-    scores["highscores"] = sorted(scores["highscores"], key=lambda x: x["score"], reverse=True)[:MAX_SCORES]
-    save_scores(scores)
+    if score < 0:
+        return {"error": "Score must be >= 0"}, 400
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                insert into public.highscores (initials, score)
+                values (%s, %s);
+            """, (initials, score))
 
     return {"ok": True}
 
-# Local run only (Render uses gunicorn)
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port, debug=True)
