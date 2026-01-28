@@ -9,7 +9,6 @@ def get_conn():
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL env var is not set")
-    # Supabase requires SSL
     return psycopg.connect(db_url, sslmode="require")
 
 @app.route("/highscores", methods=["GET"])
@@ -25,21 +24,17 @@ def get_highscores():
                 """,
                 (MAX_SCORES,),
             )
-            rows = cur.fetchall()  # list of tuples (initials, score)
+            rows = cur.fetchall()
 
-    return jsonify({
-        "highscores": [{"initials": r[0], "score": r[1]} for r in rows]
-    })
+    return jsonify({"highscores": [{"initials": r[0], "score": r[1]} for r in rows]})
 
 @app.route("/submit", methods=["POST"])
 def submit_score():
     data = request.get_json(silent=True)
-
     if not data or "initials" not in data or "score" not in data:
         return {"error": "Invalid payload"}, 400
 
     initials = str(data["initials"])[:3].upper()
-
     try:
         score = int(data["score"])
     except Exception:
@@ -51,10 +46,7 @@ def submit_score():
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                insert into public.highscores (initials, score)
-                values (%s, %s);
-                """,
+                "insert into public.highscores (initials, score) values (%s, %s);",
                 (initials, score),
             )
         conn.commit()
