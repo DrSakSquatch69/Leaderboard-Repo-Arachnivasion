@@ -1,7 +1,6 @@
 from flask import Flask, request, jsonify
 import os
-import psycopg2
-import psycopg2.extras
+import psycopg
 
 app = Flask(__name__)
 MAX_SCORES = 10
@@ -10,22 +9,26 @@ def get_conn():
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         raise RuntimeError("DATABASE_URL env var is not set")
-    return psycopg2.connect(db_url, sslmode="require")
+    # Supabase requires SSL
+    return psycopg.connect(db_url, sslmode="require")
 
 @app.route("/highscores", methods=["GET"])
 def get_highscores():
     with get_conn() as conn:
-        with conn.cursor(cursor_factory=psycopg2.extras.DictCursor) as cur:
-            cur.execute("""
+        with conn.cursor() as cur:
+            cur.execute(
+                """
                 select initials, score
                 from public.highscores
                 order by score desc, created_at asc
                 limit %s;
-            """, (MAX_SCORES,))
-            rows = cur.fetchall()
+                """,
+                (MAX_SCORES,),
+            )
+            rows = cur.fetchall()  # list of tuples (initials, score)
 
     return jsonify({
-        "highscores": [{"initials": r["initials"], "score": r["score"]} for r in rows]
+        "highscores": [{"initials": r[0], "score": r[1]} for r in rows]
     })
 
 @app.route("/submit", methods=["POST"])
@@ -36,9 +39,10 @@ def submit_score():
         return {"error": "Invalid payload"}, 400
 
     initials = str(data["initials"])[:3].upper()
+
     try:
         score = int(data["score"])
-    except:
+    except Exception:
         return {"error": "Score must be an integer"}, 400
 
     if score < 0:
@@ -46,10 +50,14 @@ def submit_score():
 
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("""
+            cur.execute(
+                """
                 insert into public.highscores (initials, score)
                 values (%s, %s);
-            """, (initials, score))
+                """,
+                (initials, score),
+            )
+        conn.commit()
 
     return {"ok": True}
 
